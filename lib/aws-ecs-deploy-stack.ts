@@ -121,9 +121,8 @@ export class AwsEcsDeployStack extends cdk.Stack {
 
     Object.entries(policyEnv).forEach(([, value]) => {
       const statement = JSON.parse(value as string);
-      console.log(statement);
       service.taskDefinition.taskRole.addToPrincipalPolicy(
-        new iam.PolicyStatement(statement)
+        iam.PolicyStatement.fromJson(statement)
       );
     });
 
