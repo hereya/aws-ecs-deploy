@@ -120,10 +120,12 @@ export class AwsEcsDeployStack extends cdk.Stack {
     );
 
     Object.entries(policyEnv).forEach(([, value]) => {
-      const statement = JSON.parse(value as string);
-      service.taskDefinition.taskRole.addToPrincipalPolicy(
-        iam.PolicyStatement.fromJson(statement)
-      );
+      const policy = JSON.parse(value as string);
+      for (const statement of policy.Statement) {
+        service.taskDefinition.taskRole.addToPrincipalPolicy(
+          iam.PolicyStatement.fromJson(statement)
+        );
+      }
     });
 
     service.targetGroup.configureHealthCheck({
