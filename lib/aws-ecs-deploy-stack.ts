@@ -8,6 +8,7 @@ import * as ecsp from "aws-cdk-lib/aws-ecs-patterns";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import { Construct } from "constructs";
 import * as secrets from "aws-cdk-lib/aws-secretsmanager";
+import * as iam from "aws-cdk-lib/aws-iam";
 
 export class AwsEcsDeployStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -15,8 +16,12 @@ export class AwsEcsDeployStack extends cdk.Stack {
 
     const vpcId: string | undefined = process.env["vpcId"];
     const healthCheckPath: string = process.env["healthCheckPath"] ?? "/";
-    const cpu: number | undefined = process.env["cpu"] ? parseInt(process.env["cpu"]) : undefined;
-    const memoryMiB: number | undefined = process.env["memoryMiB"] ? parseInt(process.env["memoryMiB"]) : undefined;
+    const cpu: number | undefined = process.env["cpu"]
+      ? parseInt(process.env["cpu"])
+      : undefined;
+    const memoryMiB: number | undefined = process.env["memoryMiB"]
+      ? parseInt(process.env["memoryMiB"])
+      : undefined;
     const customDomain: string | undefined = process.env["customDomain"];
     const customDomainZone: string | undefined =
       process.env["customDomainZone"] ?? extractDomainZone(customDomain);
@@ -37,8 +42,20 @@ export class AwsEcsDeployStack extends cdk.Stack {
           isDefault: true,
         });
 
+    const policyEnv = Object.fromEntries(
+      Object.entries(env).filter(([, value]) =>
+        (value as string).startsWith("IAM_POLICY_")
+      )
+    );
+
+    const nonPolicyEnv = Object.fromEntries(
+      Object.entries(env).filter(
+        ([, value]) => !(value as string).startsWith("IAM_POLICY_")
+      )
+    );
+
     const secretEnv = Object.fromEntries(
-      Object.entries(env)
+      Object.entries(nonPolicyEnv)
         .filter(([, value]) => (value as string).startsWith("secret://"))
         .map(([key, value]) => {
           const plainValue = (value as string).split("secret://")[1];
@@ -51,7 +68,7 @@ export class AwsEcsDeployStack extends cdk.Stack {
         })
     );
     const plainEnv = Object.fromEntries(
-      Object.entries(env).filter(
+      Object.entries(nonPolicyEnv).filter(
         ([, value]) => !(value as string).startsWith("secret://")
       )
     );
@@ -70,7 +87,7 @@ export class AwsEcsDeployStack extends cdk.Stack {
         ? route53.HostedZone.fromLookup(this, "HostedZone", {
             domainName: customDomainZone,
           })
-      : undefined;
+        : undefined;
 
     const certificate =
       hostedZone && customDomain
@@ -78,8 +95,7 @@ export class AwsEcsDeployStack extends cdk.Stack {
             domainName: customDomain,
             validation: acm.CertificateValidation.fromDns(hostedZone),
           })
-      : undefined;
-
+        : undefined;
 
     const service = new ecsp.ApplicationLoadBalancedFargateService(
       this,
@@ -105,14 +121,21 @@ export class AwsEcsDeployStack extends cdk.Stack {
       }
     );
 
+    Object.entries(policyEnv).forEach(([, value]) => {
+      service.taskDefinition.taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement(iam.PolicyStatement.fromJson(value))
+      );
+    });
+
     service.targetGroup.configureHealthCheck({
       path: healthCheckPath,
     });
 
     new cdk.CfnOutput(this, "ServiceUrl", {
-      value: customDomain && hostedZone
-        ? `https://${customDomain}`
-        : `http://${service.loadBalancer.loadBalancerDnsName}`,
+      value:
+        customDomain && hostedZone
+          ? `https://${customDomain}`
+          : `http://${service.loadBalancer.loadBalancerDnsName}`,
     });
   }
 }
