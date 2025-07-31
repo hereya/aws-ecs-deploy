@@ -116,6 +116,11 @@ export class AwsEcsDeployStack extends cdk.Stack {
         domainName: customDomain,
         domainZone: hostedZone,
         certificate: certificate,
+        deploymentController: {
+          type: ecs.DeploymentControllerType.ECS,
+        },
+        minHealthyPercent: 50,
+        maxHealthyPercent: 200,
       }
     );
 
