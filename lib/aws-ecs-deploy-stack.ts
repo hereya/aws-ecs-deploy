@@ -44,12 +44,12 @@ export class AwsEcsDeployStack extends cdk.Stack {
 
     const policyEnv = Object.fromEntries(
       Object.entries(env).filter(([key]) =>
-        key.startsWith("IAM_POLICY_")
+        key.startsWith("IAM_POLICY_") || key.startsWith("iamPolicy")
       )
     );
 
     const nonPolicyEnv = Object.fromEntries(
-      Object.entries(env).filter(([key]) => !key.startsWith("IAM_POLICY_"))
+      Object.entries(env).filter(([key]) => !key.startsWith("IAM_POLICY_") && !key.startsWith("iamPolicy"))
     );
 
     const secretEnv = Object.fromEntries(
