@@ -74,12 +74,14 @@ export class AwsEcsDeployStack extends cdk.Stack {
       )
     );
 
+    const clusterName: string | undefined = process.env["clusterName"];
+
     const asset = new assets.DockerImageAsset(this, "MyDockerImage", {
       directory: hereyaProjectRootDir,
     });
 
     const cluster = new ecs.Cluster(this, "MyCluster", {
-      clusterName: "my-cluster",
+      ...(clusterName ? { clusterName } : {}),
       vpc,
     });
 
