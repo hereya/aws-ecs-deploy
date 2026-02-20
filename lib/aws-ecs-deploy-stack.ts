@@ -6,6 +6,7 @@ import * as assets from "aws-cdk-lib/aws-ecr-assets";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as ecsp from "aws-cdk-lib/aws-ecs-patterns";
 import * as route53 from "aws-cdk-lib/aws-route53";
+import * as targets from "aws-cdk-lib/aws-route53-targets";
 import { Construct } from "constructs";
 import * as secrets from "aws-cdk-lib/aws-secretsmanager";
 import * as iam from "aws-cdk-lib/aws-iam";
@@ -22,9 +23,11 @@ export class AwsEcsDeployStack extends cdk.Stack {
     const memoryMiB: number | undefined = process.env["memoryMiB"]
       ? parseInt(process.env["memoryMiB"])
       : undefined;
-    const customDomain: string | undefined = process.env["customDomain"];
+    const allDomains = parseDomains(process.env["customDomain"]);
+    const primaryDomain: string | undefined = allDomains[0];
+    const additionalDomains: string[] = allDomains.slice(1);
     const customDomainZone: string | undefined =
-      process.env["customDomainZone"] ?? extractDomainZone(customDomain);
+      process.env["customDomainZone"] ?? extractDomainZone(primaryDomain);
     const env = JSON.parse(process.env["hereyaProjectEnv"] ?? ("{}" as string));
     const hereyaProjectRootDir: string = process.env[
       "hereyaProjectRootDir"
@@ -81,16 +84,18 @@ export class AwsEcsDeployStack extends cdk.Stack {
     });
 
     const hostedZone =
-      customDomainZone && customDomain
+      customDomainZone && primaryDomain
         ? route53.HostedZone.fromLookup(this, "HostedZone", {
             domainName: customDomainZone,
           })
         : undefined;
 
     const certificate =
-      hostedZone && customDomain
+      hostedZone && primaryDomain
         ? new acm.Certificate(this, "Certificate", {
-            domainName: customDomain,
+            domainName: primaryDomain,
+            subjectAlternativeNames:
+              additionalDomains.length > 0 ? additionalDomains : undefined,
             validation: acm.CertificateValidation.fromDns(hostedZone),
           })
         : undefined;
@@ -113,7 +118,7 @@ export class AwsEcsDeployStack extends cdk.Stack {
           secrets: secretEnv,
         },
         publicLoadBalancer: true,
-        domainName: customDomain,
+        domainName: primaryDomain,
         domainZone: hostedZone,
         certificate: certificate,
         deploymentController: {
@@ -137,14 +142,40 @@ export class AwsEcsDeployStack extends cdk.Stack {
       path: healthCheckPath,
     });
 
+    if (hostedZone && additionalDomains.length > 0) {
+      additionalDomains.forEach((domain, index) => {
+        new route53.ARecord(this, `AdditionalDNS${index}`, {
+          zone: hostedZone,
+          recordName: domain,
+          target: route53.RecordTarget.fromAlias(
+            new targets.LoadBalancerTarget(service.loadBalancer)
+          ),
+        });
+      });
+    }
+
     new cdk.CfnOutput(this, "ServiceUrl", {
       value:
-        customDomain && hostedZone
-          ? `https://${customDomain}`
+        primaryDomain && hostedZone
+          ? `https://${primaryDomain}`
           : `http://${service.loadBalancer.loadBalancerDnsName}`,
     });
+
+    if (hostedZone && additionalDomains.length > 0) {
+      new cdk.CfnOutput(this, "AdditionalServiceUrls", {
+        value: additionalDomains.map((d) => `https://${d}`).join(","),
+      });
+    }
   }
 }
+function parseDomains(input: string | undefined): string[] {
+  if (!input) return [];
+  return input
+    .split(",")
+    .map((d) => d.trim())
+    .filter((d) => d.length > 0);
+}
+
 function extractDomainZone(
   customDomain: string | undefined
 ): string | undefined {
@@ -153,8 +184,12 @@ function extractDomainZone(
   }
 
   const parts = customDomain.split(".");
-  if (parts.length <= 2) {
-    throw new Error("Apex domain is not supported: " + customDomain);
+  if (parts.length < 2) {
+    throw new Error("Invalid domain name: " + customDomain);
+  }
+
+  if (parts.length === 2) {
+    return customDomain;
   }
 
   return parts.slice(1).join(".");
