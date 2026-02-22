@@ -23,6 +23,9 @@ export class AwsEcsDeployStack extends cdk.Stack {
     const memoryMiB: number | undefined = process.env["memoryMiB"]
       ? parseInt(process.env["memoryMiB"])
       : undefined;
+    const desiredCount: number | undefined = process.env["desiredCount"]
+      ? parseInt(process.env["desiredCount"])
+      : undefined;
     const allDomains = parseDomains(process.env["customDomain"]);
     const primaryDomain: string | undefined = allDomains[0];
     const additionalDomains: string[] = allDomains.slice(1);
@@ -107,6 +110,7 @@ export class AwsEcsDeployStack extends cdk.Stack {
       "MyWebServer",
       {
         cluster,
+        desiredCount,
         assignPublicIp: true,
         memoryLimitMiB: memoryMiB ?? 1024,
         cpu: cpu ?? 512,
@@ -123,6 +127,7 @@ export class AwsEcsDeployStack extends cdk.Stack {
         domainName: primaryDomain,
         domainZone: hostedZone,
         certificate: certificate,
+        redirectHTTP: !!certificate,
         deploymentController: {
           type: ecs.DeploymentControllerType.ECS,
         },
