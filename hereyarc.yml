@@ -1,3 +1,7 @@
+name: hereya/aws-ecs-deploy
+version: 0.1.0
+description: "Deploys a containerized application to AWS ECS Fargate with ALB, optional HTTPS via ACM, custom domain via Route 53, secret management via Secrets Manager, and IAM policy attachment."
+visibility: public
 iac: cdk
 infra: aws
 deploy: true
