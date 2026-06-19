@@ -136,6 +136,17 @@ export class AwsEcsDeployStack extends cdk.Stack {
       }
     );
 
+    // Optionally raise the ALB idle timeout (default 60s) so slow/large uploads
+    // over poor connections aren't cut mid-request. Set `albIdleTimeout`
+    // (seconds) to override; left unset keeps the AWS default.
+    const albIdleTimeout = process.env["albIdleTimeout"];
+    if (albIdleTimeout) {
+      service.loadBalancer.setAttribute(
+        "idle_timeout.timeout_seconds",
+        String(parseInt(albIdleTimeout, 10))
+      );
+    }
+
     Object.entries(policyEnv).forEach(([, value]) => {
       const policy = JSON.parse(value as string);
       for (const statement of policy.Statement) {
