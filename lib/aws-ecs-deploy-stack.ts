@@ -18,6 +18,38 @@ export class AwsEcsDeployStack extends cdk.Stack {
 
     const vpcId: string | undefined = process.env["vpcId"];
     const healthCheckPath: string = process.env["healthCheckPath"] ?? "/";
+    // Optional target-group health-check tuning. Left unset keeps AWS defaults
+    // (interval 30s, timeout 5s, healthy/unhealthy threshold 5/2), which make a
+    // fresh task take ~150s (30s × 5) to be marked healthy and so dominate the
+    // rolling-deploy time. Lower them to reach steady-state faster.
+    const healthCheckInterval: number | undefined = process.env[
+      "healthCheckInterval"
+    ]
+      ? parseInt(process.env["healthCheckInterval"], 10)
+      : undefined;
+    const healthCheckTimeout: number | undefined = process.env[
+      "healthCheckTimeout"
+    ]
+      ? parseInt(process.env["healthCheckTimeout"], 10)
+      : undefined;
+    const healthyThresholdCount: number | undefined = process.env[
+      "healthyThresholdCount"
+    ]
+      ? parseInt(process.env["healthyThresholdCount"], 10)
+      : undefined;
+    const unhealthyThresholdCount: number | undefined = process.env[
+      "unhealthyThresholdCount"
+    ]
+      ? parseInt(process.env["unhealthyThresholdCount"], 10)
+      : undefined;
+    // Optional ECS health-check grace period (seconds). Must comfortably exceed
+    // container boot + first-healthy time, otherwise ECS deems a still-booting
+    // task unhealthy and launches a replacement (churn) mid-deploy.
+    const healthCheckGracePeriod: number | undefined = process.env[
+      "healthCheckGracePeriod"
+    ]
+      ? parseInt(process.env["healthCheckGracePeriod"], 10)
+      : undefined;
     const cpu: number | undefined = process.env["cpu"]
       ? parseInt(process.env["cpu"])
       : undefined;
@@ -151,6 +183,12 @@ export class AwsEcsDeployStack extends cdk.Stack {
         },
         minHealthyPercent: 50,
         maxHealthyPercent: 200,
+        ...(healthCheckGracePeriod !== undefined
+          ? {
+              healthCheckGracePeriod:
+                cdk.Duration.seconds(healthCheckGracePeriod),
+            }
+          : {}),
       }
     );
 
@@ -176,6 +214,18 @@ export class AwsEcsDeployStack extends cdk.Stack {
 
     service.targetGroup.configureHealthCheck({
       path: healthCheckPath,
+      ...(healthCheckInterval !== undefined
+        ? { interval: cdk.Duration.seconds(healthCheckInterval) }
+        : {}),
+      ...(healthCheckTimeout !== undefined
+        ? { timeout: cdk.Duration.seconds(healthCheckTimeout) }
+        : {}),
+      ...(healthyThresholdCount !== undefined
+        ? { healthyThresholdCount }
+        : {}),
+      ...(unhealthyThresholdCount !== undefined
+        ? { unhealthyThresholdCount }
+        : {}),
     });
 
     // Optionally shorten the target group deregistration delay (connection

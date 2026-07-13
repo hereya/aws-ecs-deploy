@@ -54,4 +54,40 @@ describe("AwsEcsDeployStack deployment tuning", () => {
       ).toBe(false);
     }
   });
+
+  test("tunes target group health check when knobs are provided", () => {
+    const template = synth({
+      healthCheckInterval: "15",
+      healthCheckTimeout: "5",
+      healthyThresholdCount: "2",
+      unhealthyThresholdCount: "2",
+    });
+    template.hasResourceProperties("AWS::ElasticLoadBalancingV2::TargetGroup", {
+      HealthCheckIntervalSeconds: 15,
+      HealthCheckTimeoutSeconds: 5,
+      HealthyThresholdCount: 2,
+      UnhealthyThresholdCount: 2,
+    });
+  });
+
+  test("does not set health check overrides when unset (AWS defaults preserved)", () => {
+    const template = synth();
+    const targetGroups = template.findResources(
+      "AWS::ElasticLoadBalancingV2::TargetGroup"
+    );
+    for (const tg of Object.values(targetGroups)) {
+      const props = tg.Properties ?? {};
+      expect(props.HealthCheckIntervalSeconds).toBeUndefined();
+      expect(props.HealthCheckTimeoutSeconds).toBeUndefined();
+      expect(props.HealthyThresholdCount).toBeUndefined();
+      expect(props.UnhealthyThresholdCount).toBeUndefined();
+    }
+  });
+
+  test("sets ECS health check grace period when provided", () => {
+    const template = synth({ healthCheckGracePeriod: "120" });
+    template.hasResourceProperties("AWS::ECS::Service", {
+      HealthCheckGracePeriodSeconds: 120,
+    });
+  });
 });
