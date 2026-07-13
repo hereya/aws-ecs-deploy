@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import * as cdk from "aws-cdk-lib";
 import { SecretValue } from "aws-cdk-lib";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
@@ -77,6 +78,22 @@ export class AwsEcsDeployStack extends cdk.Stack {
       )
     );
 
+    // Hash of all secret values. Included as a plain env var on the container
+    // so that any change to a secret value forces a new task definition revision
+    // and a new ECS deployment (otherwise ECS keeps the old values since the
+    // secret ARN reference does not change).
+    const secretValuesHash = crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify(
+          Object.entries(nonPolicyEnv)
+            .filter(([, value]) => (value as string).startsWith("secret://"))
+            .sort(([a], [b]) => a.localeCompare(b))
+        )
+      )
+      .digest("hex")
+      .slice(0, 16);
+
     const clusterName: string | undefined = process.env["clusterName"];
 
     const asset = new assets.DockerImageAsset(this, "MyDockerImage", {
@@ -120,6 +137,7 @@ export class AwsEcsDeployStack extends cdk.Stack {
           environment: {
             PORT: "8080",
             ...plainEnv,
+            HEREYA_SECRET_VERSION: secretValuesHash,
           },
           secrets: secretEnv,
         },
@@ -159,6 +177,20 @@ export class AwsEcsDeployStack extends cdk.Stack {
     service.targetGroup.configureHealthCheck({
       path: healthCheckPath,
     });
+
+    // Optionally shorten the target group deregistration delay (connection
+    // draining). AWS default is 300s, which dominates rolling-deploy time:
+    // ECS waits the full drain of old tasks before the service is "stable".
+    // Set `deregistrationDelay` (seconds) to override; left unset keeps the
+    // AWS default. Keep it comfortably above the longest expected request so
+    // in-flight requests still finish during a deploy.
+    const deregistrationDelay = process.env["deregistrationDelay"];
+    if (deregistrationDelay) {
+      service.targetGroup.setAttribute(
+        "deregistration_delay.timeout_seconds",
+        String(parseInt(deregistrationDelay, 10))
+      );
+    }
 
     if (hostedZone && additionalDomains.length > 0) {
       additionalDomains.forEach((domain, index) => {
