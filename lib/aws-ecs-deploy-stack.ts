@@ -160,6 +160,20 @@ export class AwsEcsDeployStack extends cdk.Stack {
       path: healthCheckPath,
     });
 
+    // Optionally shorten the target group deregistration delay (connection
+    // draining). AWS default is 300s, which dominates rolling-deploy time:
+    // ECS waits the full drain of old tasks before the service is "stable".
+    // Set `deregistrationDelay` (seconds) to override; left unset keeps the
+    // AWS default. Keep it comfortably above the longest expected request so
+    // in-flight requests still finish during a deploy.
+    const deregistrationDelay = process.env["deregistrationDelay"];
+    if (deregistrationDelay) {
+      service.targetGroup.setAttribute(
+        "deregistration_delay.timeout_seconds",
+        String(parseInt(deregistrationDelay, 10))
+      );
+    }
+
     if (hostedZone && additionalDomains.length > 0) {
       additionalDomains.forEach((domain, index) => {
         new route53.ARecord(this, `AdditionalDNS${index}`, {
