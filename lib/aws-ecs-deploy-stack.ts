@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import * as cdk from "aws-cdk-lib";
 import { SecretValue } from "aws-cdk-lib";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
@@ -77,6 +78,22 @@ export class AwsEcsDeployStack extends cdk.Stack {
       )
     );
 
+    // Hash of all secret values. Included as a plain env var on the container
+    // so that any change to a secret value forces a new task definition revision
+    // and a new ECS deployment (otherwise ECS keeps the old values since the
+    // secret ARN reference does not change).
+    const secretValuesHash = crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify(
+          Object.entries(nonPolicyEnv)
+            .filter(([, value]) => (value as string).startsWith("secret://"))
+            .sort(([a], [b]) => a.localeCompare(b))
+        )
+      )
+      .digest("hex")
+      .slice(0, 16);
+
     const clusterName: string | undefined = process.env["clusterName"];
 
     const asset = new assets.DockerImageAsset(this, "MyDockerImage", {
@@ -120,6 +137,7 @@ export class AwsEcsDeployStack extends cdk.Stack {
           environment: {
             PORT: "8080",
             ...plainEnv,
+            HEREYA_SECRET_VERSION: secretValuesHash,
           },
           secrets: secretEnv,
         },
