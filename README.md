@@ -18,7 +18,9 @@ hereya add hereya/aws-ecs-deploy
 | `memoryMiB` | Memory in MiB | `1024` |
 | `desiredCount` | Number of tasks | `1` |
 | `customDomain` | Custom domain(s), comma-separated | — |
-| `customDomainZone` | Route 53 hosted zone name | Auto-detected from domain |
+| `customDomainZone` | Route 53 hosted zone name | Auto-detected from the primary domain, except with `customDomainCertificateArn` (then explicit only) |
+| `customDomainCertificateArn` | Existing ACM certificate to use instead of issuing one (for domains not hosted in this account) | — |
+| `additionalCertificateArns` | Extra ACM certificates attached to the HTTPS listener (SNI), comma-separated — how a customer-owned domain is served | — |
 | `clusterName` | ECS cluster name | Auto-generated |
 | `albIdleTimeout` | ALB idle timeout in seconds (raise for slow/large uploads) | AWS default (60) |
 | `deregistrationDelay` | Target group connection-draining delay in seconds | AWS default (300) |
@@ -39,6 +41,25 @@ The **health-check** knobs govern how fast a fresh task reaches steady-state. Wi
 ### Custom Domain & HTTPS
 
 Set `customDomain` to automatically provision an ACM certificate validated via Route 53 DNS, with HTTP-to-HTTPS redirect. Supports multiple domains (comma-separated), with the first used as the primary.
+
+### Customer-owned domains
+
+A certificate can only be DNS-validated automatically inside a Route 53 zone of
+this account, so a domain belonging to someone else needs its certificate issued
+**out of band** (the owner adds the validation records once) and then simply
+handed to the deployment:
+
+| Situation | Configuration |
+|---|---|
+| Everything on our own domain | `customDomain` only — unchanged |
+| Our domain **plus** a customer's | `customDomain` (ours) + `additionalCertificateArns` (theirs) |
+| Only domains we do not host | `customDomainCertificateArn` + explicit `customDomainZone` if any record is still wanted |
+
+The load balancer routes on the certificate presented by SNI, not on the host
+name, so an extra certificate is all it takes to serve a new domain; the
+customer aliases their domain to the `LoadBalancerDnsName` output. Domains
+outside `customDomainZone` deliberately get **no** Route 53 record here —
+their DNS belongs to their owner.
 
 ### Secret Management
 
