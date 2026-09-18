@@ -91,3 +91,102 @@ describe("AwsEcsDeployStack deployment tuning", () => {
     });
   });
 });
+
+const CERT_ARN =
+  "arn:aws:acm:eu-west-1:123456789012:certificate/11111111-2222-3333-4444-555555555555";
+const CUSTOMER_CERT_ARN =
+  "arn:aws:acm:eu-west-1:123456789012:certificate/99999999-8888-7777-6666-555555555555";
+
+describe("AwsEcsDeployStack custom domains", () => {
+  const savedEnv = process.env;
+  afterEach(() => {
+    process.env = savedEnv;
+  });
+
+  test("issues one certificate covering every domain and records them all (unchanged behaviour)", () => {
+    const template = synth({
+      customDomain: "app.curanet.dev,api.curanet.dev",
+    });
+    template.hasResourceProperties("AWS::CertificateManager::Certificate", {
+      DomainName: "app.curanet.dev",
+      SubjectAlternativeNames: ["api.curanet.dev"],
+    });
+    const records = template.findResources("AWS::Route53::RecordSet");
+    const names = Object.values(records).map((r) => r.Properties?.Name);
+    expect(names).toEqual(
+      expect.arrayContaining(["app.curanet.dev.", "api.curanet.dev."])
+    );
+  });
+
+  test("a domain outside our zone is served but gets NO record in our zone", () => {
+    const template = synth({
+      customDomain: "app.curanet.dev,app.royalonyx.com",
+    });
+    const records = template.findResources("AWS::Route53::RecordSet");
+    const names = Object.values(records).map((r) => r.Properties?.Name);
+    expect(names).toEqual(expect.arrayContaining(["app.curanet.dev."]));
+    expect(names).not.toEqual(
+      expect.arrayContaining(["app.royalonyx.com."])
+    );
+  });
+
+  test("attaches customer certificates to the HTTPS listener (no manual step)", () => {
+    const template = synth({
+      customDomain: "app.curanet.dev",
+      additionalCertificateArns: CUSTOMER_CERT_ARN,
+    });
+    template.hasResourceProperties(
+      "AWS::ElasticLoadBalancingV2::ListenerCertificate",
+      {
+        Certificates: [{ CertificateArn: CUSTOMER_CERT_ARN }],
+      }
+    );
+  });
+
+  test("no listener certificate resource when none is configured", () => {
+    const template = synth({ customDomain: "app.curanet.dev" });
+    expect(
+      Object.keys(
+        template.findResources(
+          "AWS::ElasticLoadBalancingV2::ListenerCertificate"
+        )
+      )
+    ).toHaveLength(0);
+  });
+
+  test("a supplied certificate is used as-is, and no zone is looked up for a domain we do not host", () => {
+    const template = synth({
+      customDomain: "app.royalonyx.com",
+      customDomainCertificateArn: CERT_ARN,
+    });
+    expect(
+      Object.keys(
+        template.findResources("AWS::CertificateManager::Certificate")
+      )
+    ).toHaveLength(0);
+    expect(
+      Object.keys(template.findResources("AWS::Route53::RecordSet"))
+    ).toHaveLength(0);
+    template.hasResourceProperties(
+      "AWS::ElasticLoadBalancingV2::Listener",
+      {
+        Certificates: [{ CertificateArn: CERT_ARN }],
+        Port: 443,
+      }
+    );
+  });
+
+  test("customer certificates without HTTPS are refused rather than silently ignored", () => {
+    expect(() => synth({ additionalCertificateArns: CUSTOMER_CERT_ARN })).toThrow(
+      /requires HTTPS/
+    );
+  });
+
+  test("always publishes the load balancer DNS name a customer must point at", () => {
+    const template = synth({ customDomain: "app.curanet.dev" });
+    const outputs = template.findOutputs("*");
+    expect(Object.keys(outputs)).toEqual(
+      expect.arrayContaining(["LoadBalancerDnsName"])
+    );
+  });
+});

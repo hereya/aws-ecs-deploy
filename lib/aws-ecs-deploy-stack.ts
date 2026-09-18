@@ -6,6 +6,7 @@ import { Vpc } from "aws-cdk-lib/aws-ec2";
 import * as assets from "aws-cdk-lib/aws-ecr-assets";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as ecsp from "aws-cdk-lib/aws-ecs-patterns";
+import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as targets from "aws-cdk-lib/aws-route53-targets";
 import { Construct } from "constructs";
@@ -62,8 +63,27 @@ export class AwsEcsDeployStack extends cdk.Stack {
     const allDomains = parseDomains(process.env["customDomain"]);
     const primaryDomain: string | undefined = allDomains[0];
     const additionalDomains: string[] = allDomains.slice(1);
-    const customDomainZone: string | undefined =
-      process.env["customDomainZone"] ?? extractDomainZone(primaryDomain);
+    // An already-issued certificate to use INSTEAD of provisioning one here.
+    // Required when no domain we serve lives in a Route 53 zone of this
+    // account (e.g. the whole deployment is on a customer-owned domain):
+    // DNS validation can only be automated inside a zone we control.
+    const customDomainCertificateArn: string | undefined =
+      process.env["customDomainCertificateArn"];
+    // Extra certificates attached to the HTTPS listener (SNI). This is how a
+    // customer-owned domain is served alongside ours without re-issuing our
+    // own certificate: the customer validates a certificate for their domain,
+    // its ARN goes here, and they point the domain at the load balancer.
+    const additionalCertificateArns = parseDomains(
+      process.env["additionalCertificateArns"]
+    );
+    // The zone is auto-detected from the primary domain ONLY when we are
+    // issuing the certificate ourselves. With a supplied certificate the
+    // primary domain may well be one we do not host, and guessing its zone
+    // would send `HostedZone.fromLookup` after a zone this account does not
+    // own - which fails the whole deploy. Then, a zone must be explicit.
+    const customDomainZone: string | undefined = customDomainCertificateArn
+      ? process.env["customDomainZone"]
+      : process.env["customDomainZone"] ?? extractDomainZone(primaryDomain);
     const env = JSON.parse(process.env["hereyaProjectEnv"] ?? ("{}" as string));
     const hereyaProjectRootDir: string = process.env[
       "hereyaProjectRootDir"
@@ -144,15 +164,29 @@ export class AwsEcsDeployStack extends cdk.Stack {
           })
         : undefined;
 
-    const certificate =
-      hostedZone && primaryDomain
-        ? new acm.Certificate(this, "Certificate", {
-            domainName: primaryDomain,
-            subjectAlternativeNames:
-              additionalDomains.length > 0 ? additionalDomains : undefined,
-            validation: acm.CertificateValidation.fromDns(hostedZone),
-          })
-        : undefined;
+    const certificate = customDomainCertificateArn
+      ? acm.Certificate.fromCertificateArn(
+          this,
+          "Certificate",
+          customDomainCertificateArn
+        )
+      : hostedZone && primaryDomain
+      ? new acm.Certificate(this, "Certificate", {
+          domainName: primaryDomain,
+          subjectAlternativeNames:
+            additionalDomains.length > 0 ? additionalDomains : undefined,
+          validation: acm.CertificateValidation.fromDns(hostedZone),
+        })
+      : undefined;
+
+    // A domain only gets a Route 53 record if it belongs to the zone we looked
+    // up. A customer-owned domain is served all the same (the listener routes
+    // on the certificate, not on the host) - its DNS simply lives with the
+    // customer, who aliases it to the load balancer.
+    const inOurZone = (domain: string) =>
+      !!customDomainZone &&
+      (domain === customDomainZone || domain.endsWith(`.${customDomainZone}`));
+    const primaryDomainIsOurs = !!primaryDomain && inOurZone(primaryDomain);
 
     const service = new ecsp.ApplicationLoadBalancedFargateService(
       this,
@@ -174,8 +208,11 @@ export class AwsEcsDeployStack extends cdk.Stack {
           secrets: secretEnv,
         },
         publicLoadBalancer: true,
-        domainName: primaryDomain,
-        domainZone: hostedZone,
+        // Only let the pattern create the primary A-record when the primary
+        // domain really is in our zone; otherwise the record would be written
+        // into the wrong zone.
+        domainName: primaryDomainIsOurs ? primaryDomain : undefined,
+        domainZone: primaryDomainIsOurs ? hostedZone : undefined,
         certificate: certificate,
         redirectHTTP: !!certificate,
         deploymentController: {
@@ -242,8 +279,31 @@ export class AwsEcsDeployStack extends cdk.Stack {
       );
     }
 
+    // Certificates for domains we do not own are attached to the existing
+    // HTTPS listener, which serves them by SNI. This replaces the manual
+    // `aws elbv2 add-listener-certificates` step that used to be required for
+    // every customer domain.
+    if (additionalCertificateArns.length > 0) {
+      if (!certificate) {
+        throw new Error(
+          "additionalCertificateArns requires HTTPS: set customDomain (+ a zone) or customDomainCertificateArn"
+        );
+      }
+      service.listener.addCertificates("AdditionalCertificates", [
+        ...additionalCertificateArns.map((arn) =>
+          elbv2.ListenerCertificate.fromArn(arn)
+        ),
+      ]);
+    }
+
     if (hostedZone && additionalDomains.length > 0) {
+      // NOTE: the construct id keeps the domain's ORIGINAL index, so adding a
+      // customer domain to the list never renumbers - and so never replaces -
+      // the records of the domains already deployed.
       additionalDomains.forEach((domain, index) => {
+        if (!inOurZone(domain)) {
+          return;
+        }
         new route53.ARecord(this, `AdditionalDNS${index}`, {
           zone: hostedZone,
           recordName: domain,
@@ -256,16 +316,23 @@ export class AwsEcsDeployStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, "ServiceUrl", {
       value:
-        primaryDomain && hostedZone
+        primaryDomain && certificate
           ? `https://${primaryDomain}`
           : `http://${service.loadBalancer.loadBalancerDnsName}`,
     });
 
-    if (hostedZone && additionalDomains.length > 0) {
+    if (additionalDomains.length > 0 && certificate) {
       new cdk.CfnOutput(this, "AdditionalServiceUrls", {
         value: additionalDomains.map((d) => `https://${d}`).join(","),
       });
     }
+
+    // The value a customer needs in order to point their own domain here.
+    // Always emitted: without it, onboarding a domain we do not host means
+    // digging the name out of the console.
+    new cdk.CfnOutput(this, "LoadBalancerDnsName", {
+      value: service.loadBalancer.loadBalancerDnsName,
+    });
   }
 }
 function parseDomains(input: string | undefined): string[] {
