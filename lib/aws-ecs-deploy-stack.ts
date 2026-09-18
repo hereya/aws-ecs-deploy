@@ -164,6 +164,32 @@ export class AwsEcsDeployStack extends cdk.Stack {
           })
         : undefined;
 
+    // A domain only gets a Route 53 record if it belongs to the zone we looked
+    // up. A customer-owned domain is served all the same (the listener routes
+    // on the certificate, not on the host) - its DNS simply lives with the
+    // customer, who aliases it to the load balancer.
+    const inOurZone = (domain: string) =>
+      !!customDomainZone &&
+      (domain === customDomainZone || domain.endsWith(`.${customDomainZone}`));
+    const primaryDomainIsOurs = !!primaryDomain && inOurZone(primaryDomain);
+
+    // Issuing here validates EVERY name through the single zone above. A name
+    // from any other zone - a second domain of ours, or a customer's - would
+    // have its validation records written where they prove nothing: ACM never
+    // issues, and the deploy HANGS before failing. Refuse it at synth time
+    // instead, with the way out in the message.
+    if (!customDomainCertificateArn && primaryDomain) {
+      const outOfZone = allDomains.filter((d) => !inOurZone(d));
+      if (outOfZone.length > 0) {
+        throw new Error(
+          `${outOfZone.join(", ")} is outside the hosted zone ${customDomainZone}: ` +
+            `supply customDomainCertificateArn (one certificate covering every domain, ` +
+            `validated by their owners), or additionalCertificateArns to attach a ` +
+            `separate certificate for that domain to the listener`
+        );
+      }
+    }
+
     const certificate = customDomainCertificateArn
       ? acm.Certificate.fromCertificateArn(
           this,
@@ -178,15 +204,6 @@ export class AwsEcsDeployStack extends cdk.Stack {
           validation: acm.CertificateValidation.fromDns(hostedZone),
         })
       : undefined;
-
-    // A domain only gets a Route 53 record if it belongs to the zone we looked
-    // up. A customer-owned domain is served all the same (the listener routes
-    // on the certificate, not on the host) - its DNS simply lives with the
-    // customer, who aliases it to the load balancer.
-    const inOurZone = (domain: string) =>
-      !!customDomainZone &&
-      (domain === customDomainZone || domain.endsWith(`.${customDomainZone}`));
-    const primaryDomainIsOurs = !!primaryDomain && inOurZone(primaryDomain);
 
     const service = new ecsp.ApplicationLoadBalancedFargateService(
       this,

@@ -118,9 +118,15 @@ describe("AwsEcsDeployStack custom domains", () => {
     );
   });
 
+  // NOTE: this configuration also needs a supplied certificate. Issuing one here
+  // would try to validate the customer's name in OUR zone and hang the deploy,
+  // which is refused at synth time (see the out-of-zone suite below).
   test("a domain outside our zone is served but gets NO record in our zone", () => {
     const template = synth({
       customDomain: "app.curanet.dev,app.royalonyx.com",
+      customDomainZone: "curanet.dev",
+      customDomainCertificateArn:
+        "arn:aws:acm:eu-west-1:123456789012:certificate/11111111-2222-3333-4444-555555555555",
     });
     const records = template.findResources("AWS::Route53::RecordSet");
     const names = Object.values(records).map((r) => r.Properties?.Name);
@@ -188,5 +194,46 @@ describe("AwsEcsDeployStack custom domains", () => {
     expect(Object.keys(outputs)).toEqual(
       expect.arrayContaining(["LoadBalancerDnsName"])
     );
+  });
+});
+
+describe("AwsEcsDeployStack out-of-zone domains", () => {
+  const savedEnv = process.env;
+  afterEach(() => {
+    process.env = savedEnv;
+  });
+
+  test("a domain from another zone is refused at synth instead of hanging the deploy", () => {
+    expect(() =>
+      synth({ customDomain: "app.curanet.dev,app.plateforme.com" })
+    ).toThrow(/app\.plateforme\.com is outside the hosted zone curanet\.dev/);
+  });
+
+  test("the refusal names both ways out", () => {
+    expect(() =>
+      synth({ customDomain: "app.curanet.dev,app.plateforme.com" })
+    ).toThrow(/customDomainCertificateArn[\s\S]*additionalCertificateArns/);
+  });
+
+  test("a supplied certificate lifts the restriction", () => {
+    const template = synth({
+      customDomain: "app.curanet.dev,app.plateforme.com",
+      customDomainZone: "curanet.dev",
+      customDomainCertificateArn: CERT_ARN,
+    });
+    template.hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", {
+      Certificates: [{ CertificateArn: CERT_ARN }],
+      Port: 443,
+    });
+  });
+
+  test("several domains inside our own zone stay allowed", () => {
+    const template = synth({
+      customDomain: "app.curanet.dev,api.curanet.dev",
+    });
+    template.hasResourceProperties("AWS::CertificateManager::Certificate", {
+      DomainName: "app.curanet.dev",
+      SubjectAlternativeNames: ["api.curanet.dev"],
+    });
   });
 });

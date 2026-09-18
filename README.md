@@ -55,6 +55,8 @@ handed to the deployment:
 | Our domain **plus** a customer's | `customDomain` (ours) + `additionalCertificateArns` (theirs) |
 | Only domains we do not host | `customDomainCertificateArn` + explicit `customDomainZone` if any record is still wanted |
 
+A domain outside `customDomainZone` with **no** supplied certificate is refused at synth time: issuing one here would validate that name through our own zone, where the records prove nothing, so ACM never issues and the deploy hangs before failing. The error names both ways out.
+
 The load balancer routes on the certificate presented by SNI, not on the host
 name, so an extra certificate is all it takes to serve a new domain; the
 customer aliases their domain to the `LoadBalancerDnsName` output. Domains
