@@ -237,3 +237,48 @@ describe("AwsEcsDeployStack out-of-zone domains", () => {
     });
   });
 });
+
+describe("AwsEcsDeployStack TLS security policy", () => {
+  const savedEnv = process.env;
+  afterEach(() => {
+    process.env = savedEnv;
+  });
+
+  const httpsListener = (template: Template) =>
+    Object.values(
+      template.findResources("AWS::ElasticLoadBalancingV2::Listener", {
+        Properties: { Port: 443 },
+      })
+    );
+
+  test("applies sslPolicy to the HTTPS listener", () => {
+    const template = synth({
+      customDomain: "app.curanet.dev",
+      sslPolicy: "ELBSecurityPolicy-TLS13-1-2-2021-06",
+    });
+    template.hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", {
+      Port: 443,
+      Protocol: "HTTPS",
+      SslPolicy: "ELBSecurityPolicy-TLS13-1-2-2021-06",
+    });
+  });
+
+  test("sets no SslPolicy when unset (existing deployments unchanged)", () => {
+    const template = synth({ customDomain: "app.curanet.dev" });
+    const listeners = httpsListener(template);
+    expect(listeners).toHaveLength(1);
+    expect(listeners[0].Properties).not.toHaveProperty("SslPolicy");
+  });
+
+  test("an unknown policy name is refused with the valid choices", () => {
+    expect(() =>
+      synth({ customDomain: "app.curanet.dev", sslPolicy: "TLS13" })
+    ).toThrow(/Unknown sslPolicy "TLS13"[\s\S]*ELBSecurityPolicy-TLS13-1-2-2021-06/);
+  });
+
+  test("sslPolicy without HTTPS is refused rather than silently ignored", () => {
+    expect(() =>
+      synth({ sslPolicy: "ELBSecurityPolicy-TLS13-1-2-2021-06" })
+    ).toThrow(/sslPolicy requires HTTPS/);
+  });
+});

@@ -21,6 +21,7 @@ hereya add hereya/aws-ecs-deploy
 | `customDomainZone` | Route 53 hosted zone name | Auto-detected from the primary domain, except with `customDomainCertificateArn` (then explicit only) |
 | `customDomainCertificateArn` | Existing ACM certificate to use instead of issuing one (for domains not hosted in this account) | — |
 | `additionalCertificateArns` | Extra ACM certificates attached to the HTTPS listener (SNI), comma-separated — how a customer-owned domain is served | — |
+| `sslPolicy` | TLS security policy of the HTTPS listener, e.g. `ELBSecurityPolicy-TLS13-1-2-2021-06` (TLS 1.3 + 1.2). Requires HTTPS; an unknown name is refused | ELB default (`ELBSecurityPolicy-2016-08`, TLS 1.0–1.2) |
 | `clusterName` | ECS cluster name | Auto-generated |
 | `albIdleTimeout` | ALB idle timeout in seconds (raise for slow/large uploads) | AWS default (60) |
 | `deregistrationDelay` | Target group connection-draining delay in seconds | AWS default (300) |
@@ -41,6 +42,10 @@ The **health-check** knobs govern how fast a fresh task reaches steady-state. Wi
 ### Custom Domain & HTTPS
 
 Set `customDomain` to automatically provision an ACM certificate validated via Route 53 DNS, with HTTP-to-HTTPS redirect. Supports multiple domains (comma-separated), with the first used as the primary.
+
+### TLS policy
+
+Without `sslPolicy` the HTTPS listener keeps the ELB default, `ELBSecurityPolicy-2016-08`, which still negotiates TLS 1.0 and 1.1 and does not offer TLS 1.3. Set `sslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06` (the AWS-recommended policy) to accept TLS 1.3 and 1.2 only. Any name from the CDK `elbv2.SslPolicy` list is accepted; anything else fails at synth with the list of valid names. Changing it is an in-place update of the listener — no load balancer, listener or service replacement — and leaving it unset produces exactly the same template as before.
 
 ### Customer-owned domains
 
@@ -70,3 +75,9 @@ Environment variables prefixed with `secret://` are automatically stored in AWS 
 ### IAM Policies
 
 Environment variables prefixed with `IAM_POLICY_` or `iamPolicy` are parsed as JSON IAM policy documents and attached to the ECS task role.
+
+## Changelog
+
+- **0.3.2** — optional `sslPolicy` for the HTTPS listener (e.g. TLS 1.3 + 1.2 only); unset = unchanged template.
+- **0.3.1** — a domain outside the hosted zone with no supplied certificate is refused at synth instead of hanging the deploy.
+- **0.3.0** — `additionalCertificateArns` / `customDomainCertificateArn` for customer-owned domains; `LoadBalancerDnsName` output.
