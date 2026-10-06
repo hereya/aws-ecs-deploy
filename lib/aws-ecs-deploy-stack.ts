@@ -84,6 +84,14 @@ export class AwsEcsDeployStack extends cdk.Stack {
     const customDomainZone: string | undefined = customDomainCertificateArn
       ? process.env["customDomainZone"]
       : process.env["customDomainZone"] ?? extractDomainZone(primaryDomain);
+    // Optional TLS security policy of the HTTPS listener, e.g.
+    // `ELBSecurityPolicy-TLS13-1-2-2021-06` (TLS 1.3 + 1.2 only). Left unset,
+    // nothing is passed and the listener keeps the ELB default
+    // (`ELBSecurityPolicy-2016-08`, which still accepts TLS 1.0/1.1) - so an
+    // existing deployment that does not set it sees no change at all.
+    const sslPolicy: elbv2.SslPolicy | undefined = parseSslPolicy(
+      process.env["sslPolicy"]
+    );
     const env = JSON.parse(process.env["hereyaProjectEnv"] ?? ("{}" as string));
     const hereyaProjectRootDir: string = process.env[
       "hereyaProjectRootDir"
@@ -205,6 +213,14 @@ export class AwsEcsDeployStack extends cdk.Stack {
         })
       : undefined;
 
+    // A TLS policy only means something on an HTTPS listener; on plain HTTP it
+    // would be rejected by CloudFormation at deploy time. Refuse it here.
+    if (sslPolicy && !certificate) {
+      throw new Error(
+        "sslPolicy requires HTTPS: set customDomain (+ a zone) or customDomainCertificateArn"
+      );
+    }
+
     const service = new ecsp.ApplicationLoadBalancedFargateService(
       this,
       "MyWebServer",
@@ -232,6 +248,7 @@ export class AwsEcsDeployStack extends cdk.Stack {
         domainZone: primaryDomainIsOurs ? hostedZone : undefined,
         certificate: certificate,
         redirectHTTP: !!certificate,
+        ...(sslPolicy !== undefined ? { sslPolicy } : {}),
         deploymentController: {
           type: ecs.DeploymentControllerType.ECS,
         },
@@ -352,6 +369,21 @@ export class AwsEcsDeployStack extends cdk.Stack {
     });
   }
 }
+function parseSslPolicy(
+  input: string | undefined
+): elbv2.SslPolicy | undefined {
+  const value = input?.trim();
+  if (!value) return undefined;
+  const known = Object.values(elbv2.SslPolicy) as string[];
+  if (!known.includes(value)) {
+    throw new Error(
+      `Unknown sslPolicy "${value}". Use an ELB security policy name such as ` +
+        `"${elbv2.SslPolicy.RECOMMENDED_TLS}" (TLS 1.3 + 1.2). Known values: ${known.join(", ")}`
+    );
+  }
+  return value as elbv2.SslPolicy;
+}
+
 function parseDomains(input: string | undefined): string[] {
   if (!input) return [];
   return input
