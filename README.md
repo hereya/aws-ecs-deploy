@@ -22,6 +22,7 @@ hereya add hereya/aws-ecs-deploy
 | `customDomainCertificateArn` | Existing ACM certificate to use instead of issuing one (for domains not hosted in this account) | — |
 | `additionalCertificateArns` | Extra ACM certificates attached to the HTTPS listener (SNI), comma-separated — how a customer-owned domain is served | — |
 | `clusterName` | ECS cluster name | Auto-generated |
+| `privateTasks` | `"true"` runs the tasks in the VPC's private subnets (routed to a NAT gateway), without a public IP: all outbound traffic leaves through the NAT's fixed IP (for partner APIs that whitelist source IPs). The ALB stays public. Requires private subnets with a NAT route in the task AZs | unset (public subnets + public IP) |
 | `albIdleTimeout` | ALB idle timeout in seconds (raise for slow/large uploads) | AWS default (60) |
 | `deregistrationDelay` | Target group connection-draining delay in seconds | AWS default (300) |
 | `healthCheckInterval` | Seconds between target-group health checks | AWS default (30) |
