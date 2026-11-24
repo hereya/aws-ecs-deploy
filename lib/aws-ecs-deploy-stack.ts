@@ -2,7 +2,7 @@ import * as crypto from "crypto";
 import * as cdk from "aws-cdk-lib";
 import { SecretValue } from "aws-cdk-lib";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
-import { Vpc } from "aws-cdk-lib/aws-ec2";
+import { SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
 import * as assets from "aws-cdk-lib/aws-ecr-assets";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as ecsp from "aws-cdk-lib/aws-ecs-patterns";
@@ -91,6 +91,14 @@ export class AwsEcsDeployStack extends cdk.Stack {
     if (!hereyaProjectRootDir) {
       throw new Error("hereyaProjectRootDir context variable is required");
     }
+
+    // « privateTasks » (opt-in): run the tasks in the VPC's PRIVATE subnets
+    // (routed to a NAT gateway) without a public IP, so every outbound call
+    // leaves through the NAT's fixed Elastic IP — needed by partner APIs that
+    // whitelist source IPs. The load balancer stays public. Default (unset /
+    // anything but "true") keeps the historical behaviour: public subnets +
+    // a public IP per task.
+    const privateTasks = process.env["privateTasks"] === "true";
 
     // Look up the VPC using the parameter value
     const vpc = vpcId
@@ -211,7 +219,10 @@ export class AwsEcsDeployStack extends cdk.Stack {
       {
         cluster,
         desiredCount,
-        assignPublicIp: true,
+        assignPublicIp: !privateTasks,
+        ...(privateTasks
+          ? { taskSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS } }
+          : {}),
         memoryLimitMiB: memoryMiB ?? 1024,
         cpu: cpu ?? 512,
         taskImageOptions: {

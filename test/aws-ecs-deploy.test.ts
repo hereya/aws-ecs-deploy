@@ -237,3 +237,35 @@ describe("AwsEcsDeployStack out-of-zone domains", () => {
     });
   });
 });
+
+describe("AwsEcsDeployStack private task subnets", () => {
+  const savedEnv = process.env;
+  afterEach(() => {
+    process.env = savedEnv;
+  });
+
+  const networkOf = (template: Template) =>
+    Object.values(template.findResources("AWS::ECS::Service"))[0].Properties
+      .NetworkConfiguration.AwsvpcConfiguration;
+
+  test("keeps public subnets and a public IP by default", () => {
+    const template = synth({});
+    expect(networkOf(template).AssignPublicIp).toBe("ENABLED");
+  });
+
+  test("runs tasks in private subnets without a public IP when privateTasks is true", () => {
+    const publicSubnets = networkOf(synth({})).Subnets;
+    const template = synth({ privateTasks: "true" });
+    const network = networkOf(template);
+    expect(network.AssignPublicIp).toBe("DISABLED");
+    expect(network.Subnets).not.toEqual(publicSubnets);
+    // The load balancer itself stays internet-facing.
+    template.hasResourceProperties("AWS::ElasticLoadBalancingV2::LoadBalancer", {
+      Scheme: "internet-facing",
+    });
+  });
+
+  test("ignores any value other than \"true\"", () => {
+    expect(networkOf(synth({ privateTasks: "yes" })).AssignPublicIp).toBe("ENABLED");
+  });
+});
